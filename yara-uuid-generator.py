@@ -80,12 +80,20 @@ def process_file(input_path, output_path, filename, replace_files):
     check_for_meta_section = False
     new_meta_line = ""
     number_of_inserts = 0
+    meta_section_found = False
     for i, line in enumerate(yara_rule_lines_copy):
         logging.debug("Line: '%s'", line)
 
         # Whenever we find a line that contains "strings:" or "condition:" we insert the new meta data line before that line
         if check_for_meta_section and ( "strings:" in line or "condition:" in line ):
             logging.debug("Inserting new meta data line: '%s'", new_meta_line)
+            # If the rules doesn't have a meta section yet, we add it
+            if not meta_section_found:
+                logging.debug("Adding meta section")
+                # Insert the meta section
+                yara_rule_lines.insert(i + number_of_inserts, "meta:")
+                # Increase the number of inserts
+                number_of_inserts += 1
             # Insert the new meta data line before the current line
             yara_rule_lines.insert(i + number_of_inserts, new_meta_line)
             # Reset the new meta data line
@@ -108,16 +116,23 @@ def process_file(input_path, output_path, filename, replace_files):
             new_meta_line = ""
             # Reset the marker that we check for the meta data section
             check_for_meta_section = False
+        # Check if a meta section is present
+        elif "meta:" in line:
+            logging.debug("Meta section found")
+            # Set a marker that we found the meta section
+            meta_section_found = True
 
         # Loop over the rule name, UUID and indentation format list
         for rule_name_uuid in rule_name_uuid_list:
             # Check if the rule name is in the line
-            if rule_name_uuid[0] in line:
+            if line.startswith("rule ") and rule_name_uuid[0] in line:
                 # Now we create the new meta data line and prepend the indentation format
                 new_meta_line = rule_name_uuid[2] + 'uuid = "' + str(rule_name_uuid[1]) + '"'
                 logging.debug("New meta data line: '%s'", new_meta_line)
                 # We set a marker that we now check for the meta data section
                 check_for_meta_section = True
+                # Reset the meta section found marker
+                meta_section_found = False
 
     # Replace the input file with the new file
     if replace_files:
