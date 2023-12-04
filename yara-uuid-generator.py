@@ -29,7 +29,10 @@ def process_files(input_path, output_path, replace_files):
     # Process all files in the input directory
     for filename in os.listdir(input_path):
         if os.path.isfile(os.path.join(input_path, filename)):
-            process_file(input_path, output_path, filename, replace_files)
+            # if the file has a *.yar or *.yara extension
+            if filename.endswith(".yar") or filename.endswith(".yara"):
+                # Process the file
+                process_file(input_path, output_path, filename, replace_files)
 
 
 def process_file(input_path, output_path, filename, replace_files):
@@ -152,16 +155,19 @@ def determine_meta_indentation(rule):
 
         # We split the raw_meta field value by the newline character
         raw_meta_lines = rule['raw_meta'].split('\n')
-        # First line after the meta line
-        line_to_check = raw_meta_lines[1]
-        # Regex match that line
-        match = pattern.search(line_to_check)
 
-        # The indentation is the part of the line before the first meta data value begins
-        indentation = line_to_check[0:match.start()]
-
-        # Log the indentation
-        logging.debug("Meta indentation: '%s'", indentation)
+        # Check each line and start with the second line
+        for meta_line in raw_meta_lines[1:]:
+            # Regex match that line
+            match = pattern.search(meta_line)
+            # If we found a match
+            if match:
+                # The indentation is the part of the line before the first meta data value begins
+                indentation = meta_line[0:match.start()]
+                # Log the indentation
+                logging.debug("Meta indentation: '%s'", indentation)
+                # We are done
+                break
 
     return indentation
 
