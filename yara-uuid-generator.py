@@ -142,12 +142,19 @@ def process_file(input_path, output_path, filename, replace_files):
 
     # or write the new file to the output directory
     else:
-        # Check if the output directory exists and create it if necessary
-        if not os.path.exists(output_path):
-            os.mkdir(output_path)
-        # Write the file
-        with open(os.path.join(output_path, filename), 'w', encoding="utf-8") as f:
-            f.write('\n'.join(yara_rule_lines))
+        # If output path ends with *.yar, write it to a single file with the same name
+        if output_path.endswith(".yar"):
+            # Write the file
+            with open(output_path, 'a', encoding="utf-8") as f:
+                f.write('\n'.join(yara_rule_lines))
+        # Otherwise write the file to the output directory
+        else:
+            # Check if the output directory exists and create it if necessary
+            if not os.path.exists(output_path):
+                os.mkdir(output_path)
+            # Write the file
+            with open(os.path.join(output_path, filename), 'w', encoding="utf-8") as f:
+                f.write('\n'.join(yara_rule_lines))
 
 
 def determine_meta_indentation(rule):
@@ -233,5 +240,11 @@ if __name__ == "__main__":
         logger.error('Input file or directory does not exist')
         exit(1)
 
-    # Process all files in the input directory
-    process_files(args.input, args.output, REPLACE_FILES)
+    # Check if the input is a file
+    if os.path.isfile(args.input):
+        # Process the file
+        process_file(os.path.dirname(args.input), args.output, os.path.basename(args.input), REPLACE_FILES)
+    # Input is a directory
+    else:
+        # Process all files in the input directory
+        process_files(args.input, args.output, REPLACE_FILES)
