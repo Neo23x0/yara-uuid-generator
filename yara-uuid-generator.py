@@ -127,7 +127,7 @@ def process_file(input_path, output_path, filename, replace_files):
             # Check if the rule name is in the line
             if line.startswith("rule ") and rule_name_uuid[0] in line:
                 # Now we create the new meta data line and prepend the indentation format
-                new_meta_line = rule_name_uuid[2] + 'uuid = "' + str(rule_name_uuid[1]) + '"'
+                new_meta_line = rule_name_uuid[2] + 'id = "' + str(rule_name_uuid[1]) + '"'
                 logging.debug("New meta data line: '%s'", new_meta_line)
                 # We set a marker that we now check for the meta data section
                 check_for_meta_section = True
