@@ -110,7 +110,7 @@ def process_file(input_path, output_path, filename, replace_files):
             # Reset the marker that we check for the meta data section
             check_for_meta_section = False
         # Don't add a rule UUID if the rule already has a UUID
-        elif check_for_meta_section and "uuid = " in line:
+        elif check_for_meta_section and "id = " in line:
             logging.debug("Rule already has a UUID")
             # Reset the new meta data line
             new_meta_line = ""
