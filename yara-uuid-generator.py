@@ -1,250 +1,309 @@
 import argparse
-import os
 import logging
+import os
 import re
 import uuid
-from pprint import pprint
+
 import plyara
 from plyara.utils import generate_hash
+
+RULE_FILE_EXTENSIONS = (".yar", ".yara")
+SECTION_HEADERS = {"meta:", "strings:", "condition:"}
+NON_WHITESPACE_PATTERN = re.compile(r"[^\s\t]")
 
 
 def generate_uuid_from_hash(hash_value):
     """
-    Generate a UUID from a hash
+    Generate a deterministic UUID from a rule hash.
     """
     return uuid.uuid5(uuid.NAMESPACE_DNS, hash_value)
 
 
-def process_files(input_path, output_path, replace_files):
+def is_rule_file(path):
     """
-    Process all files in the input directory
+    Check whether the provided path targets a YARA file.
     """
-    logging.info('Processing files in directory: %s', input_path)
-
-    # Check if the output directory exists
-    if not replace_files:
-        # Create the output directory
-        os.mkdir(output_path)
-
-    # Process all files in the input directory
-    for filename in os.listdir(input_path):
-        if os.path.isfile(os.path.join(input_path, filename)):
-            # if the file has a *.yar or *.yara extension
-            if filename.endswith(".yar") or filename.endswith(".yara"):
-                # Process the file
-                process_file(input_path, output_path, filename, replace_files)
+    return path.lower().endswith(RULE_FILE_EXTENSIONS)
 
 
-def process_file(input_path, output_path, filename, replace_files):
+def ensure_parent_directory(path):
     """
-    Process a single file
+    Create the parent directory for a file path if needed.
     """
-    logging.info('Processing file: %s', filename)
+    parent_directory = os.path.dirname(path)
+    if parent_directory:
+        os.makedirs(parent_directory, exist_ok=True)
 
-    # We keep the rule name, the UUID and the indentation format in a list for the replacement
-    rule_name_uuid_list = []
 
-    # Read the file
-    with open(os.path.join(input_path, filename), 'r', encoding="utf-8") as f:
-        yara_file_content = f.read()
+def get_rule_files(input_path):
+    """
+    Return the YARA files in a directory in deterministic order.
+    """
+    return sorted(
+        filename
+        for filename in os.listdir(input_path)
+        if os.path.isfile(os.path.join(input_path, filename)) and is_rule_file(filename)
+    )
 
-    # Parse the file
-    yara_parser = plyara.Plyara()
-    yara_rules = yara_parser.parse_string(yara_file_content)
 
-    # Generate a UUID for each rule
-    for rule in yara_rules:
-        # Print the rule
-        #pprint(rule)
+def line_indentation(line):
+    """
+    Return the leading indentation of a line.
+    """
+    return line[:len(line) - len(line.lstrip())]
 
-        # Calculate the logic hash
-        logic_hash = generate_hash(rule)
 
-        # Calculate a UUID for the rule hash
-        rule_uuid = generate_uuid_from_hash(logic_hash)
+def rule_has_uuid(rule):
+    """
+    Check whether a rule already contains an id metadata entry.
+    """
+    return any("id" in metadata_entry for metadata_entry in rule.get("metadata", []))
 
-        # Log the rule Rule Name and UUID
-        logging.info('Rule Name: %s UUID: %s', rule['rule_name'], rule_uuid)
 
-        # Determine the indentation of the meta section
-        meta_indentation = determine_meta_indentation(rule)
+def find_rule_section(lines, start_index, stop_index, section_name):
+    """
+    Find the first occurrence of a rule section header.
+    """
+    for index in range(start_index, stop_index):
+        if lines[index].strip() == section_name:
+            return index
 
-        # Add the rule name, the UUID and the indentation format to the list
-        rule_name_uuid_list.append((rule['rule_name'], rule_uuid, meta_indentation))
+    return None
 
-    # Now we replace the rules in place
-    # First we split the content of the file into lines
-    yara_rule_lines = yara_file_content.split('\n')
-    yara_rule_lines_copy = yara_rule_lines.copy()
-    # Now we loop over the lines and insert the UUIDs in the meta data section when we find the rule name
-    check_for_meta_section = False
-    new_meta_line = ""
-    number_of_inserts = 0
-    meta_section_found = False
-    for i, line in enumerate(yara_rule_lines_copy):
-        logging.debug("Line: '%s'", line)
 
-        # Whenever we find a line that contains "strings:" or "condition:" we insert the new meta data line before that line
-        if check_for_meta_section and ( "strings:" in line or "condition:" in line ):
-            logging.debug("Inserting new meta data line: '%s'", new_meta_line)
-            # If the rules doesn't have a meta section yet, we add it
-            if not meta_section_found:
-                logging.debug("Adding meta section")
-                # Insert the meta section
-                yara_rule_lines.insert(i + number_of_inserts, "meta:")
-                # Increase the number of inserts
-                number_of_inserts += 1
-            # Insert the new meta data line before the current line
-            yara_rule_lines.insert(i + number_of_inserts, new_meta_line)
-            # Reset the new meta data line
-            new_meta_line = ""
-            # Reset the marker that we check for the meta data section
-            check_for_meta_section = False
-            # Increase the number of inserts
-            number_of_inserts += 1
-        # Also reset the marker when we find the next rule (a line that begins with "rule ")
-        elif check_for_meta_section and line.startswith("rule "):
-            logging.debug("Resetting new meta data line")
-            # Reset the new meta data line
-            new_meta_line = ""
-            # Reset the marker that we check for the meta data section
-            check_for_meta_section = False
-        # Don't add a rule UUID if the rule already has a UUID
-        elif check_for_meta_section and "id = " in line:
-            logging.debug("Rule already has a UUID")
-            # Reset the new meta data line
-            new_meta_line = ""
-            # Reset the marker that we check for the meta data section
-            check_for_meta_section = False
-        # Check if a meta section is present
-        elif "meta:" in line:
-            logging.debug("Meta section found")
-            # Set a marker that we found the meta section
-            meta_section_found = True
+def find_insertion_section(lines, start_index, stop_index):
+    """
+    Find the section before which a new meta entry should be inserted.
+    """
+    for index in range(start_index, stop_index):
+        if lines[index].strip() in {"strings:", "condition:"}:
+            return index
 
-        # Loop over the rule name, UUID and indentation format list
-        for rule_name_uuid in rule_name_uuid_list:
-            # Check if the rule name is in the line
-            if line.startswith("rule ") and rule_name_uuid[0] in line:
-                # Now we create the new meta data line and prepend the indentation format
-                new_meta_line = rule_name_uuid[2] + 'id = "' + str(rule_name_uuid[1]) + '"'
-                logging.debug("New meta data line: '%s'", new_meta_line)
-                # We set a marker that we now check for the meta data section
-                check_for_meta_section = True
-                # Reset the meta section found marker
-                meta_section_found = False
-
-    # Replace the input file with the new file
-    if replace_files:
-        # Write the file
-        with open(os.path.join(input_path, filename), 'w', encoding="utf-8") as f:
-            f.write('\n'.join(yara_rule_lines))
-
-    # or write the new file to the output directory
-    else:
-        # If output path ends with *.yar, write it to a single file with the same name
-        if output_path.endswith(".yar"):
-            # Write the file
-            with open(output_path, 'a', encoding="utf-8") as f:
-                f.write('\n'.join(yara_rule_lines))
-        # Otherwise write the file to the output directory
-        else:
-            # Check if the output directory exists and create it if necessary
-            if not os.path.exists(output_path):
-                os.mkdir(output_path)
-            # Write the file
-            with open(os.path.join(output_path, filename), 'w', encoding="utf-8") as f:
-                f.write('\n'.join(yara_rule_lines))
+    return None
 
 
 def determine_meta_indentation(rule):
     """
-    Determine the indentation of the meta section
+    Determine the indentation used for entries inside the meta section.
     """
-    # Set the default indentation
-    indentation = '   '
+    indentation = "   "
 
-    # Regex pattern
-    pattern = re.compile(r'[^\s\t]')
+    if "raw_meta" not in rule:
+        return indentation
 
-    # Check if the rule has a meta section
-    if 'raw_meta' in rule:
-        # The raw_meta field value looks like this:
-        # 'raw_meta': 'meta:\n'
-        #     '      description = "Detects NatBypass tool (also used by '
-        #
-        # We try to find out what follows the "meta:\n" until the first meta data value begins
-
-        # We split the raw_meta field value by the newline character
-        raw_meta_lines = rule['raw_meta'].split('\n')
-
-        # Check each line and start with the second line
-        for meta_line in raw_meta_lines[1:]:
-            # Regex match that line
-            match = pattern.search(meta_line)
-            # If we found a match
-            if match:
-                # The indentation is the part of the line before the first meta data value begins
-                indentation = meta_line[0:match.start()]
-                # Log the indentation
-                logging.debug("Meta indentation: '%s'", indentation)
-                # We are done
-                break
+    raw_meta_lines = rule["raw_meta"].split("\n")
+    for meta_line in raw_meta_lines[1:]:
+        match = NON_WHITESPACE_PATTERN.search(meta_line)
+        if match:
+            indentation = meta_line[:match.start()]
+            logging.debug("Meta indentation: '%s'", indentation)
+            break
 
     return indentation
 
 
+def determine_new_meta_indentation(lines, start_index, stop_index):
+    """
+    Determine indentation for a newly created meta section and its entries.
+    """
+    section_index = find_insertion_section(lines, start_index, stop_index)
+    if section_index is None:
+        raise ValueError("Could not determine where to insert a meta section")
+
+    section_indentation = line_indentation(lines[section_index])
+
+    for index in range(section_index + 1, stop_index):
+        stripped_line = lines[index].strip()
+        if not stripped_line:
+            continue
+        if stripped_line in SECTION_HEADERS or stripped_line == "}":
+            break
+
+        entry_indentation = line_indentation(lines[index])
+        if len(entry_indentation) > len(section_indentation):
+            return section_indentation, entry_indentation
+
+    indentation_unit = "\t" if "\t" in section_indentation else "    "
+    return section_indentation, section_indentation + indentation_unit
+
+
+def insert_rule_uuid(lines, rule, rule_uuid):
+    """
+    Insert the generated UUID into a rule's meta section.
+    """
+    start_index = rule["start_line"] - 1
+    stop_index = min(rule["stop_line"], len(lines))
+    meta_section_index = find_rule_section(lines, start_index, stop_index, "meta:")
+    meta_line = f'{determine_meta_indentation(rule)}id = "{rule_uuid}"'
+
+    if meta_section_index is not None:
+        insert_index = find_insertion_section(lines, meta_section_index + 1, stop_index)
+        if insert_index is None:
+            raise ValueError(
+                f'Could not determine where to insert the UUID for rule {rule["rule_name"]}'
+            )
+        lines.insert(insert_index, meta_line)
+        return
+
+    insert_index = find_insertion_section(lines, start_index, stop_index)
+    if insert_index is None:
+        raise ValueError(f'Could not determine where to add a meta section for rule {rule["rule_name"]}')
+
+    section_indentation, entry_indentation = determine_new_meta_indentation(
+        lines,
+        start_index,
+        stop_index,
+    )
+    lines.insert(insert_index, f"{section_indentation}meta:")
+    lines.insert(insert_index + 1, f'{entry_indentation}id = "{rule_uuid}"')
+
+
+def transform_yara_content(yara_file_content):
+    """
+    Add deterministic UUIDs to rules that do not already have one.
+    """
+    parser = plyara.Plyara()
+    yara_rules = parser.parse_string(yara_file_content)
+    yara_rule_lines = yara_file_content.splitlines()
+    had_trailing_newline = yara_file_content.endswith("\n")
+
+    for rule in reversed(yara_rules):
+        if rule_has_uuid(rule):
+            logging.info("Rule Name: %s already has an ID; skipping", rule["rule_name"])
+            continue
+
+        logic_hash = generate_hash(rule)
+        rule_uuid = generate_uuid_from_hash(logic_hash)
+        logging.info("Rule Name: %s UUID: %s", rule["rule_name"], rule_uuid)
+        insert_rule_uuid(yara_rule_lines, rule, rule_uuid)
+
+    transformed_content = "\n".join(yara_rule_lines)
+    if had_trailing_newline:
+        transformed_content += "\n"
+
+    return transformed_content
+
+
+def transform_file(input_path, filename):
+    """
+    Read, transform, and return the contents of a single file.
+    """
+    logging.info("Processing file: %s", filename)
+
+    with open(os.path.join(input_path, filename), "r", encoding="utf-8") as file_handle:
+        yara_file_content = file_handle.read()
+
+    return transform_yara_content(yara_file_content)
+
+
+def write_file(output_path, content):
+    """
+    Write content to disk, creating parent directories when required.
+    """
+    ensure_parent_directory(output_path)
+
+    with open(output_path, "w", encoding="utf-8") as file_handle:
+        file_handle.write(content)
+
+
+def process_files(input_path, output_path, replace_files):
+    """
+    Process all YARA files in a directory.
+    """
+    logging.info("Processing files in directory: %s", input_path)
+    filenames = get_rule_files(input_path)
+
+    if not filenames:
+        logging.warning("No YARA files found in directory: %s", input_path)
+        return
+
+    if replace_files:
+        for filename in filenames:
+            write_file(
+                os.path.join(input_path, filename),
+                transform_file(input_path, filename),
+            )
+        return
+
+    if is_rule_file(output_path):
+        combined_content = "\n\n".join(
+            transform_file(input_path, filename).rstrip("\n") for filename in filenames
+        )
+        if combined_content:
+            combined_content += "\n"
+        write_file(output_path, combined_content)
+        return
+
+    os.makedirs(output_path, exist_ok=True)
+    for filename in filenames:
+        write_file(
+            os.path.join(output_path, filename),
+            transform_file(input_path, filename),
+        )
+
+
+def process_single_file(input_path, output_path, replace_files):
+    """
+    Process a single file input.
+    """
+    source_directory = os.path.dirname(input_path) or "."
+    filename = os.path.basename(input_path)
+    transformed_content = transform_file(source_directory, filename)
+
+    if replace_files:
+        write_file(input_path, transformed_content)
+        return
+
+    if is_rule_file(output_path):
+        write_file(output_path, transformed_content)
+        return
+
+    os.makedirs(output_path, exist_ok=True)
+    write_file(os.path.join(output_path, filename), transformed_content)
+
+
 if __name__ == "__main__":
 
-    # Parse the arguments
-    parser = argparse.ArgumentParser(description='Yara UUID Generator')
-    parser.add_argument('-i', '--input', help='Input file or directory', required=True)
-    parser.add_argument('-o', '--output', help='Output file or directory', required=False, default='output')
-    parser.add_argument('-d', '--debug', help='Enable debug logging', required=False, action='store_true')
+    parser = argparse.ArgumentParser(description="YARA UUID Generator")
+    parser.add_argument("-i", "--input", help="Input file or directory", required=True)
+    parser.add_argument(
+        "-o",
+        "--output",
+        help="Output file or directory. Omit this flag to replace files in place.",
+        required=False,
+        default=None,
+    )
+    parser.add_argument("-d", "--debug", help="Enable debug logging", required=False, action="store_true")
     args = parser.parse_args()
 
-    # Initialize the logger
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG if args.debug else logging.INFO)
-    # Set the level of the plyara logger to warning
-    logging.getLogger('plyara').setLevel(logging.WARNING)
-    logging.getLogger('tzlocal').setLevel(logging.CRITICAL)
-    # Create a handler for the command line
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.DEBUG if args.debug else logging.INFO)
-    # Create a handler for the log file
-    fh = logging.FileHandler("yara-uuid-generator.log")
-    fh.setLevel(logging.DEBUG)
-    # Create a formatter for the log messages that go to the log file
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    # Create a formatter for the log messages that go to the command line
-    formatter_cmd = logging.Formatter('%(message)s')
-    # Add the formatter to the handlers
-    ch.setFormatter(formatter_cmd)
-    fh.setFormatter(formatter)
-    # Add the handlers to the logger
-    logger.addHandler(ch)
-    logger.addHandler(fh)
+    logging.getLogger("plyara").setLevel(logging.WARNING)
+    logging.getLogger("tzlocal").setLevel(logging.CRITICAL)
 
-    # Log the a startup message
-    logger.info('Starting Yara UUID Generator')
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG if args.debug else logging.INFO)
 
-    # If no output directory is specified, we replace the files in the input directory
-    REPLACE_FILES = False
-    if args.output == 'output':
-        # Set a marker to indicate that we are overwriting the input files
-        REPLACE_FILES = True
+    file_handler = logging.FileHandler("yara-uuid-generator.log")
+    file_handler.setLevel(logging.DEBUG)
 
-    # Check if the input file or directory exists
+    log_formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    console_formatter = logging.Formatter("%(message)s")
+
+    console_handler.setFormatter(console_formatter)
+    file_handler.setFormatter(log_formatter)
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
+
+    logger.info("Starting YARA UUID Generator")
+
+    replace_files = args.output is None
+
     if not os.path.exists(args.input):
-        logger.error('Input file or directory does not exist')
-        exit(1)
+        logger.error("Input file or directory does not exist")
+        raise SystemExit(1)
 
-    # Check if the input is a file
     if os.path.isfile(args.input):
-        # Process the file
-        process_file(os.path.dirname(args.input), args.output, os.path.basename(args.input), REPLACE_FILES)
-    # Input is a directory
+        process_single_file(args.input, args.output, replace_files)
     else:
-        # Process all files in the input directory
-        process_files(args.input, args.output, REPLACE_FILES)
+        process_files(args.input, args.output, replace_files)
