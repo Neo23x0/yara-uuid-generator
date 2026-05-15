@@ -2,11 +2,22 @@
 
 `yara-uuid-generator.py` adds a deterministic `id` value to the `meta` section of YARA rules.
 
-The generated value is based on [`plyara.utils.generate_hash`](https://github.com/plyara/plyara), so it stays stable for the same rule logic and changes when the relevant rule content changes.
+The UUID is derived from [`plyara.utils.generate_hash`](https://github.com/plyara/plyara), but only at the moment the `id` is first assigned. After that, the `id` is preserved and is not recalculated automatically when the rule changes later.
+
+This is the key distinction from using the `plyara` rule hash directly:
+
+- `plyara` hash: fingerprint of the rule's current logic
+- This tool's UUID: stable rule identity assigned once
+
+That allows you to run the tool on a rule set once, assign deterministic UUIDs, and keep those UUIDs for the rest of each rule's lifetime.
+
+If two identical rules exist in two different rule sets at the time of assignment, they receive the same UUID. If those rules diverge later, they still keep the UUID they were originally assigned.
 
 ## What It Does
 
 - Adds `id = "<uuid>"` to rules that do not already define one
+- Uses the current `plyara` rule hash only to derive the initial UUID
+- Leaves existing `id` values untouched, even if the rule logic changes later
 - Preserves existing `meta` indentation
 - Creates a `meta` section when a rule does not have one yet
 - Supports regular, `private`, and `global` rule declarations
@@ -123,4 +134,5 @@ rule HKTL_NATBypass_Dec22_1 : T1090 {
 ## Notes
 
 - Rules that already contain `meta.id` are left unchanged.
+- The UUID is intended to act as a stable identifier, not as a live hash of the current rule content.
 - A log file named `yara-uuid-generator.log` is written to the current working directory.
