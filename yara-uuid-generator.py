@@ -175,7 +175,11 @@ def transform_yara_content(yara_file_content):
         logic_hash = generate_hash(rule)
         rule_uuid = generate_uuid_from_hash(logic_hash)
         logging.info("Rule Name: %s UUID: %s", rule["rule_name"], rule_uuid)
-        insert_rule_uuid(yara_rule_lines, rule, rule_uuid)
+        try:
+            insert_rule_uuid(yara_rule_lines, rule, rule_uuid)
+        except ValueError as exc:
+            logging.warning("Rule Name: %s skipped: %s", rule["rule_name"], exc)
+            continue
 
     transformed_content = "\n".join(yara_rule_lines)
     if had_trailing_newline:
